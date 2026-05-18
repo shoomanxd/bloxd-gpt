@@ -1,5 +1,4 @@
-// api/chat.js — Vercel Serverless Function
-// Bloxd.io Coding Assistant — supports Grok (xAI) and Mistral AI
+// api/chat.js — Vercel Serverless Function (CommonJS)
 
 const GITHUB_RAW = "https://raw.githubusercontent.com/Bloxdy/code-api/main";
 
@@ -8,10 +7,6 @@ const DOC_FILES = [
   "API_REFERENCE.md",
   "CLIENT_OPTIONS.md",
   "CALLBACKS.md",
-  "ENTITY_SETTINGS.md",
-  "MOB_SETTINGS.md",
-  "ENTITY_MESHES.md",
-  "LOBBY_LEADERBOARD.md",
 ];
 
 let docsCache = null;
@@ -25,139 +20,100 @@ async function fetchDocs() {
   const results = await Promise.allSettled(
     DOC_FILES.map((file) =>
       fetch(`${GITHUB_RAW}/${file}`)
-        .then((r) => (r.ok ? r.text() : null))
-        .then((text) => (text ? `\n\n## ${file}\n${text}` : ""))
+        .then((r) => (r.ok ? r.text() : ""))
         .catch(() => "")
     )
   );
 
   const combined = results
-    .map((r) => (r.status === "fulfilled" ? r.value : ""))
-    .join("");
+    .map((r, i) => (r.status === "fulfilled" && r.value ? `## ${DOC_FILES[i]}\n${r.value}` : ""))
+    .filter(Boolean)
+    .join("\n\n");
 
-  docsCache = combined || "Documentation temporarily unavailable.";
+  docsCache = (combined || "Docs unavailable.").slice(0, 12000);
   docsCacheTime = now;
   return docsCache;
 }
 
-const SYSTEM_PROMPT = (docs) => `You are BloxdBot, an expert AI assistant for Bloxd.io scripting and coding.
-
-CRITICAL RULES:
-1. ONLY answer questions about Bloxd.io coding using the official API documentation below.
-2. NEVER invent new callbacks, API methods, or features not in the docs.
-3. NEVER suggest using callbacks inside Code Blocks (only World Code supports callbacks).
-4. Always use EXACT method names and signatures from the docs.
-5. If something is not in the docs, say so clearly.
-6. Be interactive, helpful, and enthusiastic!
-7. Format code examples cleanly using JavaScript.
-
-KEY BLOXD FACTS:
-- Use /* comment */ NOT // comment (single-line comments do not work in Bloxd)
-- myId, playerId, thisPos, ownerDbId are pre-defined
-- api.log() and console.log() both work
-- World Code supports ALL callbacks; Code Blocks do NOT support callbacks
-- Use globalThis.varName to share state between code blocks
-
---- BLOXD.IO API DOCS ---
-${docs.slice(0, 12000)}
---- END DOCS ---`;
-
 async function callGrok(apiKey, messages, systemPrompt) {
-  let response;
-  try {
-    response = await fetch("https://api.x.ai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "grok-3-mini",
-        messages: [{ role: "system", content: systemPrompt }, ...messages],
-        max_tokens: 2048,
-        temperature: 0.3,
-        stream: false,
-      }),
-    });
-  } catch (fetchErr) {
-    throw new Error(`Grok network error: ${fetchErr.message}`);
-  }
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "grok-3-mini",
+      messages: [{ role: "system", content: systemPrompt }, ...messages],
+      max_tokens: 1024,
+      temperature: 0.3,
+    }),
+  });
 
-  const rawText = await response.text();
-
+  const text = await response.text();
   if (!response.ok) {
-    try {
-      const errJson = JSON.parse(rawText);
-      const msg = errJson?.error?.message || errJson?.message || rawText.slice(0, 300);
-      throw new Error(`Grok ${response.status}: ${msg}`);
-    } catch (e) {
-      if (e.message.startsWith("Grok")) throw e;
-      throw new Error(`Grok ${response.status}: ${rawText.slice(0, 300)}`);
-    }
+    let msg = text.slice(0, 300);
+    try { msg = JSON.parse(text)?.error?.message || msg; } catch {}
+    throw new Error(`Grok error ${response.status}: ${msg}`);
   }
-
-  try {
-    const data = JSON.parse(rawText);
-    return data.choices[0].message.content;
-  } catch {
-    throw new Error(`Grok returned unexpected response: ${rawText.slice(0, 200)}`);
-  }
+  const data = JSON.parse(text);
+  return data.choices[0].message.content;
 }
 
 async function callMistral(apiKey, messages, systemPrompt) {
-  let response;
-  try {
-    response = await fetch("https://api.mistral.ai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "mistral-small-latest",
-        messages: [{ role: "system", content: systemPrompt }, ...messages],
-        max_tokens: 1024,
-        temperature: 0.3,
-      }),
-    });
-  } catch (fetchErr) {
-    throw new Error(`Mistral network error: ${fetchErr.message}`);
-  }
+  const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "mistral-small-latest",
+      messages: [{ role: "system", content: systemPrompt }, ...messages],
+      max_tokens: 1024,
+      temperature: 0.3,
+    }),
+  });
 
-  const rawText = await response.text();
-
+  const text = await response.text();
   if (!response.ok) {
-    try {
-      const errJson = JSON.parse(rawText);
-      const msg = errJson?.message || errJson?.error?.message || rawText.slice(0, 300);
-      throw new Error(`Mistral ${response.status}: ${msg}`);
-    } catch (e) {
-      if (e.message.startsWith("Mistral")) throw e;
-      throw new Error(`Mistral ${response.status}: ${rawText.slice(0, 300)}`);
-    }
+    let msg = text.slice(0, 300);
+    try { msg = JSON.parse(text)?.message || JSON.parse(text)?.error?.message || msg; } catch {}
+    throw new Error(`Mistral error ${response.status}: ${msg}`);
   }
-
-  try {
-    const data = JSON.parse(rawText);
-    return data.choices[0].message.content;
-  } catch {
-    throw new Error(`Mistral returned unexpected response: ${rawText.slice(0, 200)}`);
-  }
+  const data = JSON.parse(text);
+  return data.choices[0].message.content;
 }
 
 module.exports = async function handler(req, res) {
+  // Always JSON, never HTML
+  res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method === "OPTIONS") return res.status(200).json({ ok: true });
+
+  // GET = health check so you can test the route is alive
+  if (req.method === "GET") {
+    return res.status(200).json({ status: "BloxdBot API is running ✅" });
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
   try {
-    const { messages, mode, apiKey } = req.body;
+    const body = req.body;
+
+    if (!body || typeof body !== "object") {
+      return res.status(400).json({ error: "Request body missing or not JSON" });
+    }
+
+    const { messages, mode, apiKey } = body;
 
     if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: "messages array required" });
+      return res.status(400).json({ error: "messages must be an array" });
     }
     if (!mode || !["grok", "mistral"].includes(mode)) {
       return res.status(400).json({ error: "mode must be 'grok' or 'mistral'" });
@@ -167,7 +123,21 @@ module.exports = async function handler(req, res) {
     }
 
     const docs = await fetchDocs();
-    const systemPrompt = SYSTEM_PROMPT(docs);
+    const systemPrompt = `You are BloxdBot, an expert Bloxd.io coding assistant.
+
+RULES:
+- Only answer Bloxd.io coding questions using the docs below
+- NEVER invent API methods or callbacks not in the docs
+- NEVER use callbacks inside Code Blocks (World Code only)
+- Use /* comment */ not // comment
+- myId, playerId, thisPos, ownerDbId are pre-defined
+- api.log() = console.log()
+- globalThis.x to share vars between blocks
+- Code Blocks: no callbacks, 16000 char limit
+- World Code: runs once, supports all callbacks
+
+DOCS:
+${docs}`;
 
     let reply;
     if (mode === "grok") {
@@ -177,8 +147,9 @@ module.exports = async function handler(req, res) {
     }
 
     return res.status(200).json({ reply });
+
   } catch (error) {
-    console.error("Chat error:", error.message);
+    console.error("Handler error:", error.message);
     return res.status(500).json({ error: error.message });
   }
 };
